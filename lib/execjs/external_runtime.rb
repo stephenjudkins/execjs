@@ -95,6 +95,15 @@ module ExecJS
         @runner_source ||= IO.read(@runner_path)
       end
 
+      def self.use_spoon?
+        @use_spoon ||= begin
+          require 'spoon'
+          true
+        rescue LoadError => e
+          false
+        end
+      end
+
       def exec_runtime(filename)
         output = sh("#{@binary} #{filename} 2>&1")
         if $?.success?
@@ -131,10 +140,26 @@ module ExecJS
         nil
       end
 
+      if use_spoon?
+        require 'tempfile'
+        def do_sh(command)
+          t = Tempfile.new "execjs"
+          t.close
+          pid = Spoon.spawnp "/bin/sh", "-c", "#{command} > #{t.path}"
+          Process.waitpid pid
+          File.read t.path
+        end
+      else
+        def do_sh(command)
+          IO.popen(command) { |f| output = f.read }
+        end
+      end
+
       if "".respond_to?(:force_encoding)
         def sh(command)
           output, options = nil, {}
           options[:internal_encoding] = @conversion[:from] if @conversion
+          output = do_sh(command)
           IO.popen(command, options) { |f| output = f.read }
           output.force_encoding(@conversion[:to]) if @conversion
           output
@@ -143,8 +168,7 @@ module ExecJS
         require "iconv"
 
         def sh(command)
-          output = nil
-          IO.popen(command) { |f| output = f.read }
+          output = do_sh(command)
 
           if @conversion
             Iconv.iconv(@conversion[:from], @conversion[:to], output).first
